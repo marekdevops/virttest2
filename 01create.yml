@@ -8,12 +8,13 @@
     - kubevirt.core
 
   tasks:
-    - name: Wylicz nazwy VM
+    - name: Oczyść nazwy VM zgodnie z RFC1123
       set_fact:
         vm_names: >-
           {{
-            lookup('sequence', 'start=1 end=' + vm_count|string, wantlist=True)
-            | map('regex_replace', '^(.*)$', vm_base_name ~ '-\\1')
+            vm_names
+            | map('lower')
+            | map('regex_replace', '[^a-z0-9-]', '')
             | list
           }}
 
