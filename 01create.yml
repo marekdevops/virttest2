@@ -8,19 +8,20 @@
   collections:
     - kubevirt.core
 
-  tasks:
-    - name: Zbuduj początkową listę numerów VM
-      set_fact:
-        vm_numbers: "{{ range(1, (vm_count | int) + 1) | list }}"
+  vars:
+    vm_names: []    # WAŻNE: zawsze zainicjalizowana, choćby pustą listą
 
-    - name: Zbuduj listę nazw VM
+  tasks:
+    - name: Zbuduj listę nazw VM (testvm-1, testvm-2, ...)
+      set_fact:
+        vm_names: "{{ vm_names + [ (vm_base_name ~ '-' ~ item) | lower ] }}"
+      with_sequence: "start=1 end={{ vm_count | int }}"
+
+    - name: Oczyść nazwy VM zgodnie z RFC1123 (na wszelki wypadek)
       set_fact:
         vm_names: >-
           {{
-            vm_numbers
-            | map('string')
-            | map('regex_replace', '^(.*)$', vm_base_name ~ '-\\1')
-            | map('lower')
+            vm_names
             | map('regex_replace', '[^a-z0-9-]', '')
             | list
           }}
@@ -50,8 +51,8 @@
                   requests:
                     storage: "{{ vm_disk_size }}"
                 accessModes: [ReadWriteOnce]
-        running: true      # osobny parametr
-        spec:              # to jest spec.template.spec
+        running: true
+        spec:                # to jest spec.template.spec
           domain:
             resources:
               requests:
