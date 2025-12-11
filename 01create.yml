@@ -1,0 +1,78 @@
+- name: KROK 1 – Utwórz/utrzymaj farmę VM w OpenShift Virtualization
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - group_vars/vms.yml
+
+  tasks:
+    - name: Wylicz nazwy VM
+      set_fact:
+        vm_names: >-
+          {{
+            lookup('sequence', 'start=1 end=' + vm_count|string, wantlist=True)
+            | map('regex_replace', '^(.*)$', vm_base_name ~ '-\\1')
+            | list
+          }}
+
+    - name: Utwórz/utrzymaj VM bez ISO
+      loop: "{{ vm_names }}"
+      loop_control:
+        loop_var: vm_name
+      kubevirt.core.kubevirt_vm:
+        state: present
+        kubeconfig: "{{ kubeconfig_path }}"
+        namespace: "{{ kubevirt_namespace }}"
+        name: "{{ vm_name }}"
+        # jeśli używacie instancetype/preference z OCP Virt – można to dodać
+        # instancetype:
+        #   name: u1.medium
+        data_volume_templates:
+          - metadata:
+              name: "{{ vm_name }}-rootdisk"
+            spec:
+              source:
+                registry:
+                  url: "{{ vm_image_registry_url }}"
+              storage:
+                resources:
+                  requests:
+                    storage: "{{ vm_disk_size }}"
+                accessModes: [ReadWriteOnce]
+        spec:
+          running: true
+          template:
+            metadata:
+              labels:
+                app: demo-vm-farm
+            spec:
+              domain:
+                resources:
+                  requests:
+                    cpu: "{{ vm_cpu }}"
+                    memory: "{{ vm_memory }}"
+                devices:
+                  disks:
+                    - name: rootdisk
+                      disk:
+                        bus: virtio
+                    - name: cloudinitdisk
+                      disk:
+                        bus: virtio
+              volumes:
+                - name: rootdisk
+                  dataVolume:
+                    name: "{{ vm_name }}-rootdisk"
+                - name: cloudinitdisk
+                  cloudInitNoCloud:
+                    userData: |
+                      #cloud-config
+                      users:
+                        - default
+                        - name: clouduser
+                          sudo: ALL=(ALL) NOPASSWD:ALL
+                          groups: users, admin
+                          shell: /bin/bash
+                          ssh_authorized_keys:
+                            - {{ vm_ssh_key }}
+                      ssh_pwauth: false
+                      disable_root: true
