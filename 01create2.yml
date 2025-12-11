@@ -1,0 +1,104 @@
+- name: KROK 1 – Utwórz/utrzymaj farmę VM w OpenShift Virtualization
+  hosts: localhost
+  gather_facts: false
+
+  vars_files:
+    - group_vars/vms.yml
+
+  collections:
+    - kubevirt.core
+
+  vars:
+    vm_names: []
+
+  tasks:
+    - name: Zbuduj listę nazw VM (np. testvm-1, testvm-2, ...)
+      set_fact:
+        vm_names: "{{ vm_names + [ (vm_base_name ~ '-' ~ item) | lower ] }}"
+      with_sequence: "start=1 end={{ vm_count | int }}"
+
+    - name: Oczyść nazwy VM zgodnie z RFC1123
+      set_fact:
+        vm_names: >-
+          {{
+            vm_names
+            | map('regex_replace', '[^a-z0-9-]', '')
+            | list
+          }}
+
+    - name: DEBUG – pokaż nazwy VM
+      debug:
+        var: vm_names
+
+    - name: Utwórz/utrzymaj VM (bez ISO, z dwoma NIC, pusty rootdisk)
+      loop: "{{ vm_names }}"
+      kubevirt_vm:
+        state: present
+        kubeconfig: "{{ kubeconfig_path }}"
+        namespace: "{{ kubevirt_namespace }}"
+        name: "{{ item }}"
+        labels:
+          app: demo-vm-farm
+
+        # 👉 PUSTY dysk zamiast Fedora/Ubuntu
+        data_volume_templates:
+          - metadata:
+              name: "{{ item }}-rootdisk"
+            spec:
+              source:
+                blank: {}           # ← PUSTY DYSK
+              storage:
+                resources:
+                  requests:
+                    storage: "{{ vm_disk_size }}"
+                accessModes: [ReadWriteOnce]
+
+        # 👉 VM NIE startuje od razu
+        running: false
+
+        spec:
+          domain:
+            resources:
+              requests:
+                cpu: "{{ vm_cpu }}"
+                memory: "{{ vm_memory }}"
+            devices:
+              disks:
+                - name: rootdisk
+                  disk:
+                    bus: virtio
+                - name: cloudinitdisk
+                  disk:
+                    bus: virtio
+              interfaces:
+                - name: default
+                  model: virtio
+                  masquerade: {}
+                - name: vlan214
+                  model: virtio
+                  bridge: {}
+
+          networks:
+            - name: default
+              pod: {}
+            - name: vlan214
+              multus:
+                networkName: "default/vlan214-net"
+
+          volumes:
+            - name: rootdisk
+              dataVolume:
+                name: "{{ item }}-rootdisk"
+            - name: cloudinitdisk
+              cloudInitNoCloud:
+                userData: |
+                  #cloud-config
+                  users:
+                    - name: clouduser
+                      sudo: ALL=(ALL) NOPASSWD:ALL
+                      groups: users, admin
+                      shell: /bin/bash
+                      ssh_authorized_keys:
+                        - {{ vm_ssh_key }}
+                  ssh_pwauth: false
+                  disable_root: true
