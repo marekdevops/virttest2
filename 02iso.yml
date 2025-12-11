@@ -12,16 +12,12 @@
     vm_names: []
 
   tasks:
-    - name: Zbuduj listę numerów VM
-      set_fact:
-        vm_numbers: "{{ range(1, (vm_count | int) + 1) | list }}"
-
-    - name: Zbuduj listę nazw VM
+    - name: Zbuduj listę nazw VM (tak samo jak w kroku 1)
       set_fact:
         vm_names: "{{ vm_names + [ (vm_base_name ~ '-' ~ item) | lower ] }}"
       with_sequence: "start=1 end={{ vm_count | int }}"
 
-    - name: Oczyść nazwy VM zgodnie z RFC1123
+    - name: Oczyść nazwy VM zgodnie z RFC1123 (na wszelki wypadek)
       set_fact:
         vm_names: >-
           {{
@@ -30,25 +26,70 @@
             | list
           }}
 
-    - name: DEBUG – nazwy VM
+    - name: DEBUG – pokaż nazwy VM
       debug:
         var: vm_names
 
-
-    # ─────────────────────────────────────────────────────────────
-    # Krok podpięcia ISO do każdej VM
-    # ─────────────────────────────────────────────────────────────
-    - name: Podepnij ISO do VM
+    - name: Podłącz ISO PVC jako dysk CDROM do każdej VM
       loop: "{{ vm_names }}"
       kubevirt_vm:
         state: present
         kubeconfig: "{{ kubeconfig_path }}"
         namespace: "{{ kubevirt_namespace }}"
         name: "{{ item }}"
-        running: true
+        labels:
+          app: demo-vm-farm
+
+        # UWAGA: to jest dokładnie ta sama definicja DV co w kroku 1
         data_volume_templates:
           - metadata:
               name: "{{ item }}-rootdisk"
             spec:
               source:
                 registry:
+                  url: "{{ vm_image_registry_url }}"
+              storage:
+                resources:
+                  requests:
+                    storage: "{{ vm_disk_size }}"
+                accessModes: [ReadWriteOnce]
+
+        running: true
+        spec:                # spec.template.spec
+          domain:
+            resources:
+              requests:
+                cpu: "{{ vm_cpu }}"
+                memory: "{{ vm_memory }}"
+            devices:
+              disks:
+                - name: rootdisk
+                  disk:
+                    bus: virtio
+                - name: cloudinitdisk
+                  disk:
+                    bus: virtio
+                - name: iso-disk
+                  cdrom:
+                    bus: sata
+          volumes:
+            - name: rootdisk
+              dataVolume:
+                name: "{{ item }}-rootdisk"
+            - name: cloudinitdisk
+              cloudInitNoCloud:
+                userData: |
+                  #cloud-config
+                  users:
+                    - default
+                    - name: clouduser
+                      sudo: ALL=(ALL) NOPASSWD:ALL
+                      groups: users, admin
+                      shell: /bin/bash
+                      ssh_authorized_keys:
+                        - {{ vm_ssh_key }}
+                  ssh_pwauth: false
+                  disable_root: true
+            - name: iso-disk
+              persistentVolumeClaim:
+                claimName: "{{ vm_iso_pvc_name }}"
