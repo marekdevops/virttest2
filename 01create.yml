@@ -1,6 +1,7 @@
 - name: KROK 1 – Utwórz/utrzymaj farmę VM w OpenShift Virtualization
   hosts: localhost
   gather_facts: false
+
   vars_files:
     - group_vars/vms.yml
 
@@ -8,30 +9,38 @@
     - kubevirt.core
 
   tasks:
-    - name: Oczyść nazwy VM zgodnie z RFC1123
+    - name: Zbuduj początkową listę numerów VM
+      set_fact:
+        vm_numbers: "{{ range(1, (vm_count | int) + 1) | list }}"
+
+    - name: Zbuduj listę nazw VM
       set_fact:
         vm_names: >-
           {{
-            vm_names
+            vm_numbers
+            | map('string')
+            | map('regex_replace', '^(.*)$', vm_base_name ~ '-\\1')
             | map('lower')
             | map('regex_replace', '[^a-z0-9-]', '')
             | list
           }}
 
+    - name: DEBUG – pokaż nazwy VM
+      debug:
+        var: vm_names
+
     - name: Utwórz/utrzymaj VM (bez ISO)
       loop: "{{ vm_names }}"
-      loop_control:
-        loop_var: vm_name
       kubevirt_vm:
         state: present
         kubeconfig: "{{ kubeconfig_path }}"
         namespace: "{{ kubevirt_namespace }}"
-        name: "{{ vm_name }}"
+        name: "{{ item }}"
         labels:
           app: demo-vm-farm
         data_volume_templates:
           - metadata:
-              name: "{{ vm_name }}-rootdisk"
+              name: "{{ item }}-rootdisk"
             spec:
               source:
                 registry:
@@ -41,8 +50,8 @@
                   requests:
                     storage: "{{ vm_disk_size }}"
                 accessModes: [ReadWriteOnce]
-        running: true          # <— WAŻNE: osobny parametr
-        spec:                  # <— to jest spec.template.spec
+        running: true      # osobny parametr
+        spec:              # to jest spec.template.spec
           domain:
             resources:
               requests:
@@ -59,7 +68,7 @@
           volumes:
             - name: rootdisk
               dataVolume:
-                name: "{{ vm_name }}-rootdisk"
+                name: "{{ item }}-rootdisk"
             - name: cloudinitdisk
               cloudInitNoCloud:
                 userData: |
