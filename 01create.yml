@@ -4,6 +4,9 @@
   vars_files:
     - group_vars/vms.yml
 
+  collections:
+    - kubevirt.core
+
   tasks:
     - name: Wylicz nazwy VM
       set_fact:
@@ -14,18 +17,17 @@
             | list
           }}
 
-    - name: Utwórz/utrzymaj VM bez ISO
+    - name: Utwórz/utrzymaj VM (bez ISO)
       loop: "{{ vm_names }}"
       loop_control:
         loop_var: vm_name
-      kubevirt.core.kubevirt_vm:
+      kubevirt_vm:
         state: present
         kubeconfig: "{{ kubeconfig_path }}"
         namespace: "{{ kubevirt_namespace }}"
         name: "{{ vm_name }}"
-        # jeśli używacie instancetype/preference z OCP Virt – można to dodać
-        # instancetype:
-        #   name: u1.medium
+        labels:
+          app: demo-vm-farm
         data_volume_templates:
           - metadata:
               name: "{{ vm_name }}-rootdisk"
@@ -38,41 +40,36 @@
                   requests:
                     storage: "{{ vm_disk_size }}"
                 accessModes: [ReadWriteOnce]
-        spec:
-          running: true
-          template:
-            metadata:
-              labels:
-                app: demo-vm-farm
-            spec:
-              domain:
-                resources:
-                  requests:
-                    cpu: "{{ vm_cpu }}"
-                    memory: "{{ vm_memory }}"
-                devices:
-                  disks:
-                    - name: rootdisk
-                      disk:
-                        bus: virtio
-                    - name: cloudinitdisk
-                      disk:
-                        bus: virtio
-              volumes:
+        running: true          # <— WAŻNE: osobny parametr
+        spec:                  # <— to jest spec.template.spec
+          domain:
+            resources:
+              requests:
+                cpu: "{{ vm_cpu }}"
+                memory: "{{ vm_memory }}"
+            devices:
+              disks:
                 - name: rootdisk
-                  dataVolume:
-                    name: "{{ vm_name }}-rootdisk"
+                  disk:
+                    bus: virtio
                 - name: cloudinitdisk
-                  cloudInitNoCloud:
-                    userData: |
-                      #cloud-config
-                      users:
-                        - default
-                        - name: clouduser
-                          sudo: ALL=(ALL) NOPASSWD:ALL
-                          groups: users, admin
-                          shell: /bin/bash
-                          ssh_authorized_keys:
-                            - {{ vm_ssh_key }}
-                      ssh_pwauth: false
-                      disable_root: true
+                  disk:
+                    bus: virtio
+          volumes:
+            - name: rootdisk
+              dataVolume:
+                name: "{{ vm_name }}-rootdisk"
+            - name: cloudinitdisk
+              cloudInitNoCloud:
+                userData: |
+                  #cloud-config
+                  users:
+                    - default
+                    - name: clouduser
+                      sudo: ALL=(ALL) NOPASSWD:ALL
+                      groups: users, admin
+                      shell: /bin/bash
+                      ssh_authorized_keys:
+                        - {{ vm_ssh_key }}
+                  ssh_pwauth: false
+                  disable_root: true
