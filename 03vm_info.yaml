@@ -29,19 +29,14 @@
               - name: {{ disk.name }}
                 type: {{ (disk.keys() | list | difference(['name']))[0] | default('n/a') }}
               {% endfor %}
-            Volumes:
-              {% for vol in item.spec.template.spec.volumes | default([]) %}
-              - name: {{ vol.name }}
-                kind: {{ (vol.keys() | list | difference(['name']))[0] | default('n/a') }}
-              {% endfor %}
-            Interfaces:
+            Interfaces (spec):
               {% for iface in item.spec.template.spec.domain.devices.interfaces | default([]) %}
-              - name: {{ iface.name }}
+              - logical_name: {{ iface.name | default('n/a') }}
                 model: {{ iface.model | default('virtio') }}
               {% endfor %}
       loop: "{{ vm_info.resources | default([]) }}"
 
-    # --- MAC ADRESY INTERFEJSÓW SIECIOWYCH ---
+    # --- MAC + NAZWY INTERFEJSÓW Z VMI ---
 
     - name: Pobierz informacje o wszystkich VirtualMachineInstance (VMI)
       kubevirt_vmi_info:
@@ -49,14 +44,15 @@
         namespace: "{{ kubevirt_namespace }}"
       register: vmi_info
 
-    - name: Wypisz adresy MAC dla kart sieciowych każdej VM
+    - name: Wypisz adresy MAC i nazwy interfejsów każdej działającej VM
       debug:
         msg: |
-          VM/VMI: {{ item.metadata.name }}
+          VMI: {{ item.metadata.name }}
             Node: {{ item.status.nodeName | default('unknown') }}
-            Interfejsy:
+            Interfejsy (runtime):
               {% for iface in item.status.interfaces | default([]) %}
-              - name: {{ iface.name | default('eth?') }}
+              - logical_name: {{ iface.name | default('n/a') }}
+                guest_if: {{ iface.interfaceName | default('n/a') }}
                 mac: {{ iface.mac | default('unknown') }}
                 ip: {{ iface.ipAddress | default('n/a') }}
               {% endfor %}
