@@ -7,7 +7,7 @@
 
   vars:
     kubeconfig_path: ~/.kube/config
-    kubevirt_namespace: proj-vms   # <- zmień na swój namespace
+    kubevirt_namespace: testvm   # <- zmień na swój namespace
 
   tasks:
     - name: Pobierz informacje o wszystkich VM w namespace
@@ -16,7 +16,9 @@
         namespace: "{{ kubevirt_namespace }}"
       register: vm_info
 
-    - name: Wypisz podstawowe parametry każdej VM (CPU, RAM, dyski, sieci)
+    # --- OGÓLNE INFO O VM (CPU, RAM, dyski itd.) ---
+
+    - name: Wypisz podstawowe parametry każdej VM
       debug:
         msg: |
           VM: {{ item.metadata.name }}
@@ -29,31 +31,18 @@
               - name: {{ disk.name }}
                 type: {{ (disk.keys() | list | difference(['name']))[0] | default('n/a') }}
               {% endfor %}
-            Interfaces (spec):
+      loop: "{{ vm_info.resources | default([]) }}"
+
+    # --- OSOBNY TASK: INTERFEJSY + MAC Z *SPEC* VM (DZIAŁA TEŻ DLA WYŁĄCZONYCH) ---
+
+    - name: Wypisz interfejsy i adresy MAC z definicji VM (działa też dla wyłączonych)
+      debug:
+        msg: |
+          VM: {{ item.metadata.name }}
+            Interfejsy (spec):
               {% for iface in item.spec.template.spec.domain.devices.interfaces | default([]) %}
               - logical_name: {{ iface.name | default('n/a') }}
                 model: {{ iface.model | default('virtio') }}
+                mac: {{ iface.macAddress | default('brak (MAC nie ustawiony w spec)') }}
               {% endfor %}
       loop: "{{ vm_info.resources | default([]) }}"
-
-    # --- MAC + NAZWY INTERFEJSÓW Z VMI ---
-
-    - name: Pobierz informacje o wszystkich VirtualMachineInstance (VMI)
-      kubevirt_vmi_info:
-        kubeconfig: "{{ kubeconfig_path }}"
-        namespace: "{{ kubevirt_namespace }}"
-      register: vmi_info
-
-    - name: Wypisz adresy MAC i nazwy interfejsów każdej działającej VM
-      debug:
-        msg: |
-          VMI: {{ item.metadata.name }}
-            Node: {{ item.status.nodeName | default('unknown') }}
-            Interfejsy (runtime):
-              {% for iface in item.status.interfaces | default([]) %}
-              - logical_name: {{ iface.name | default('n/a') }}
-                guest_if: {{ iface.interfaceName | default('n/a') }}
-                mac: {{ iface.mac | default('unknown') }}
-                ip: {{ iface.ipAddress | default('n/a') }}
-              {% endfor %}
-      loop: "{{ vmi_info.resources | default([]) }}"
