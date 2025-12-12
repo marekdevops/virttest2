@@ -1,0 +1,63 @@
+- name: Zbierz informacje o maszynach wirtualnych w OpenShift Virtualization
+  hosts: localhost
+  gather_facts: false
+
+  collections:
+    - kubevirt.core
+
+  vars:
+    kubeconfig_path: ~/.kube/config
+    kubevirt_namespace: proj-vms   # <- zmień na swój namespace
+
+  tasks:
+    - name: Pobierz informacje o wszystkich VM w namespace
+      kubevirt_vm_info:
+        kubeconfig: "{{ kubeconfig_path }}"
+        namespace: "{{ kubevirt_namespace }}"
+      register: vm_info
+
+    - name: Wypisz podstawowe parametry każdej VM (CPU, RAM, dyski, sieci)
+      debug:
+        msg: |
+          VM: {{ item.metadata.name }}
+            Namespace: {{ item.metadata.namespace }}
+            Running: {{ item.spec.running | default('unknown') }}
+            CPU: {{ item.spec.template.spec.domain.resources.requests.cpu | default('not set') }}
+            Memory: {{ item.spec.template.spec.domain.resources.requests.memory | default('not set') }}
+            Disks:
+              {% for disk in item.spec.template.spec.domain.devices.disks | default([]) %}
+              - name: {{ disk.name }}
+                type: {{ (disk.keys() | list | difference(['name']))[0] | default('n/a') }}
+              {% endfor %}
+            Volumes:
+              {% for vol in item.spec.template.spec.volumes | default([]) %}
+              - name: {{ vol.name }}
+                kind: {{ (vol.keys() | list | difference(['name']))[0] | default('n/a') }}
+              {% endfor %}
+            Interfaces:
+              {% for iface in item.spec.template.spec.domain.devices.interfaces | default([]) %}
+              - name: {{ iface.name }}
+                model: {{ iface.model | default('virtio') }}
+              {% endfor %}
+      loop: "{{ vm_info.resources | default([]) }}"
+
+    # --- MAC ADRESY INTERFEJSÓW SIECIOWYCH ---
+
+    - name: Pobierz informacje o wszystkich VirtualMachineInstance (VMI)
+      kubevirt_vmi_info:
+        kubeconfig: "{{ kubeconfig_path }}"
+        namespace: "{{ kubevirt_namespace }}"
+      register: vmi_info
+
+    - name: Wypisz adresy MAC dla kart sieciowych każdej VM
+      debug:
+        msg: |
+          VM/VMI: {{ item.metadata.name }}
+            Node: {{ item.status.nodeName | default('unknown') }}
+            Interfejsy:
+              {% for iface in item.status.interfaces | default([]) %}
+              - name: {{ iface.name | default('eth?') }}
+                mac: {{ iface.mac | default('unknown') }}
+                ip: {{ iface.ipAddress | default('n/a') }}
+              {% endfor %}
+      loop: "{{ vmi_info.resources | default([]) }}"
