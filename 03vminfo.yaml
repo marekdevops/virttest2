@@ -1,0 +1,29 @@
+- name: Wypisz interfejsy i MAC dla wszystkich VM w namespace
+  hosts: localhost
+  gather_facts: false
+
+  collections:
+    - kubevirt.core
+
+  vars:
+    kubeconfig_path: ~/.kube/config
+    kubevirt_namespace: testvmvms   # zmień na swój namespace
+
+  tasks:
+    - name: Pobierz informacje o wszystkich VM w namespace
+      kubevirt_vm_info:
+        kubeconfig: "{{ kubeconfig_path }}"
+        namespace: "{{ kubevirt_namespace }}"
+      register: vm_info
+
+    - name: Wypisz TYLKO interfejsy i MAC z definicji VM
+      debug:
+        msg: |
+          VM: {{ item.metadata.name }}
+            Interfejsy:
+              {% for iface in item.spec.template.spec.domain.devices.interfaces | default([]) %}
+              - logical_name: {{ iface.name | default('n/a') }}
+                model: {{ iface.model | default('virtio') }}
+                mac: {{ iface.macAddress | default('brak (MAC nie ustawiony w spec)') }}
+              {% endfor %}
+      loop: "{{ vm_info.resources | default([]) }}"
