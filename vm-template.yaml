@@ -1,0 +1,101 @@
+# Szkielet VM dla OpenShift Virtualization 4.20
+# - Pusty dysk 100G, 2 CPU, 8GB RAM, CDROM na ISO
+# - Live migration, hotplug CPU/RAM/dysków
+#
+# Użycie:
+#   oc apply -f vm-template.yaml
+#
+# Wymagania klastra (KubeVirt CR):
+#   spec:
+#     configuration:
+#       vmRolloutStrategy: "LiveUpdate"
+#     workloadUpdateStrategy:
+#       workloadUpdateMethods:
+#         - LiveMigrate
+#
+# Po instalacji OS z ISO:
+#   1. Zmień bootOrder: rootdisk=1, cdrom=2 (lub usuń cdrom)
+#   2. oc apply -f vm-template.yaml
+#   3. Zrestartuj VM: virtctl restart linux-vm -n proj-vms
+#
+# Skalowanie na żywo (bez restartu):
+#   CPU:    kubectl patch vm linux-vm -n proj-vms --type=json \
+#             -p='[{"op":"replace","path":"/spec/template/spec/domain/cpu/sockets","value":4}]'
+#   RAM:    kubectl patch vm linux-vm -n proj-vms --type=json \
+#             -p='[{"op":"replace","path":"/spec/template/spec/domain/memory/guest","value":"16Gi"}]'
+#   Dysk:   virtctl addvolume linux-vm -n proj-vms --volume-name=extra-disk --persist
+---
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: linux-vm
+  namespace: proj-vms
+  labels:
+    app: linux-vm
+spec:
+  runStrategy: Always
+
+  dataVolumeTemplates:
+    - metadata:
+        name: linux-vm-rootdisk
+      spec:
+        source:
+          blank: {}
+        storage:
+          resources:
+            requests:
+              storage: 100Gi
+          accessModes:
+            - ReadWriteMany            # RWX - wymagane dla live migration
+          # storageClassName: ocs-storagecluster-ceph-rbd-virtualization   # odkomentuj jeśli potrzeba
+
+  template:
+    metadata:
+      labels:
+        app: linux-vm
+    spec:
+      evictionStrategy: LiveMigrate    # VM migruje zamiast się wyłączać przy eviction
+
+      domain:
+        machine:
+          type: q35                    # nowoczesny chipset, lepsze wsparcie PCIe/hotplug
+
+        cpu:
+          sockets: 2
+          cores: 1
+          threads: 1
+          maxSockets: 16               # hotplug CPU - skaluj do 16 socketów bez restartu
+
+        memory:
+          guest: 8Gi
+          maxGuest: 64Gi              # hotplug RAM - skaluj do 64Gi bez restartu
+
+        devices:
+          disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+              # bootOrder: 1           # odkomentuj PO instalacji OS
+            - name: cdrom-iso
+              cdrom:
+                bus: sata
+              bootOrder: 1             # boot z CDROM - instalacja OS z ISO
+
+          interfaces:
+            - name: default
+              masquerade: {}           # masquerade - wspiera live migration
+              model: virtio
+
+        resources: {}                  # zarządzane przez cpu/memory powyżej
+
+      networks:
+        - name: default
+          pod: {}
+
+      volumes:
+        - name: rootdisk
+          dataVolume:
+            name: linux-vm-rootdisk
+        - name: cdrom-iso
+          persistentVolumeClaim:
+            claimName: tools-iso-pvc   # PVC z ISO - zmień na swoją nazwę
