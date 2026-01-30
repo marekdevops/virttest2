@@ -68,7 +68,7 @@ spec:
 
         memory:
           guest: 8Gi
-          maxGuest: 64Gi              # hotplug RAM - skaluj do 64Gi bez restartu
+          maxGuest: 512Gi             # hotplug RAM - skaluj do 512Gi bez restartu
 
         devices:
           disks:
