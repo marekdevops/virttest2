@@ -1,0 +1,129 @@
+# =============================================================================
+# WARIANT 4: Worker OpenShift — maksymalna wydajność (dedicated + hugepages + NUMA)
+# =============================================================================
+# CPU model:     host-passthrough
+# CPU hotplug:   NIE — zasoby stałe (Guaranteed QoS)
+# RAM hotplug:   NIE — zasoby stałe (Guaranteed QoS)
+# CPU pinning:   TAK — vCPU przypięte do fizycznych rdzeni
+# Emulator:      TAK — osobny rdzeń dla QEMU
+# Hugepages:     TAK — 2Mi pages, mniej TLB misses, lepsza wydajność pamięci
+# NUMA:          TAK — topologia NUMA hosta mapowana do guesta
+# Multiqueue:    TAK
+# IOThreads:     TAK
+# Balloon:       WYŁĄCZONY (wymagane z hugepages)
+#
+# Kiedy użyć:
+#   - Produkcyjny worker z maksymalną wydajnością
+#   - Workloady wrażliwe na latency pamięci (duże bazy danych, cache, Java)
+#   - Dużo RAM w VM — hugepages eliminują overhead zarządzania pamięcią
+#   - Potrzebujesz gwarancji NUMA locality (brak cross-NUMA traffic)
+#
+# Kompromis:
+#   + Najlepsza możliwa wydajność CPU i pamięci
+#   + Zero noisy neighbor, zero TLB misses, zero cross-NUMA latency
+#   + Izolowany emulator + IOThreads
+#   - BEZ hotpluga CPU/RAM
+#   - Nody MUSZĄ mieć skonfigurowane hugepages 2Mi
+#   - Zużywa 8+1 fizycznych rdzeni + 16Gi hugepages (zarezerwowane na nodzie)
+#   - Trudniejsze planowanie pojemności klastra
+#   - Live migration tylko między nodami z identycznym CPU I wolnymi hugepages
+#
+# Wymagania klastra:
+#   - Kubernetes CPU Manager włączony
+#   - Hugepages 2Mi skonfigurowane na nodach:
+#       echo 8192 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
+#     lub via MachineConfig / kernel args: hugepagesz=2M hugepages=8192
+#   - Wystarczająca liczba wolnych rdzeni i hugepages na nodach
+# =============================================================================
+---
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: worker-perf
+  namespace: proj-vms
+  labels:
+    app: ocp-worker
+    variant: perf
+spec:
+  runStrategy: Always
+
+  dataVolumeTemplates:
+    - metadata:
+        name: worker-perf-rootdisk
+      spec:
+        source:
+          blank: {}
+        storage:
+          resources:
+            requests:
+              storage: 120Gi
+          accessModes:
+            - ReadWriteMany
+
+  template:
+    metadata:
+      labels:
+        app: ocp-worker
+        variant: perf
+    spec:
+      evictionStrategy: LiveMigrate
+
+      domain:
+        machine:
+          type: q35
+
+        cpu:
+          model: host-passthrough
+          dedicatedCpuPlacement: true
+          isolateEmulatorThread: true
+          sockets: 1
+          cores: 8
+          threads: 1
+          numa:
+            guestMappingPassthrough: {}
+
+        memory:
+          hugepages:
+            pageSize: 2Mi
+
+        ioThreadsPolicy: auto
+
+        devices:
+          networkInterfaceMultiqueue: true
+          blockMultiQueue: true
+          autoattachMemBalloon: false
+          rng: {}
+          autoattachGraphicsDevice: false
+
+          disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+              # bootOrder: 1          # odkomentuj PO instalacji OS
+            - name: cdrom-iso
+              cdrom:
+                bus: sata
+              bootOrder: 1
+
+          interfaces:
+            - name: default
+              masquerade: {}
+              model: virtio
+
+        resources:
+          requests:
+            memory: 16Gi
+          limits:
+            memory: 16Gi
+
+      networks:
+        - name: default
+          pod: {}
+
+      volumes:
+        - name: rootdisk
+          dataVolume:
+            name: worker-perf-rootdisk
+        - name: cdrom-iso
+          persistentVolumeClaim:
+            claimName: tools-iso-pvc

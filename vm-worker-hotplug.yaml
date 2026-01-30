@@ -1,0 +1,107 @@
+# =============================================================================
+# WARIANT 1: Worker OpenShift — elastyczny z hotplugiem CPU/RAM
+# =============================================================================
+# CPU model:     host-model (bezpieczny dla live migration między różnymi CPU)
+# CPU hotplug:   TAK — skaluj od 8 do 32 vCPU bez restartu
+# RAM hotplug:   TAK — skaluj od 16Gi do 128Gi bez restartu
+# CPU pinning:   NIE — CPU współdzielone z innymi podami
+# Hugepages:     NIE
+# NUMA:          NIE
+# Multiqueue:    TAK — lepsza wydajność sieci i dysków
+# IOThreads:     TAK — dedykowane wątki I/O
+#
+# Kiedy użyć:
+#   - Środowisko dev/test gdzie elastyczność ważniejsza od wydajności
+#   - Chcesz dynamicznie dodawać CPU/RAM do workera bez downtime
+#   - Klaster z różnymi generacjami procesorów (host-model = bezpieczna migracja)
+#
+# Kompromis:
+#   + Hotplug CPU i RAM działa
+#   + Live migration między różnymi CPU (host-model)
+#   - Brak gwarantowanych zasobów CPU (noisy neighbor możliwy)
+#   - Niższa wydajność pamięci vs hugepages
+# =============================================================================
+---
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: worker-hotplug
+  namespace: proj-vms
+  labels:
+    app: ocp-worker
+    variant: hotplug
+spec:
+  runStrategy: Always
+
+  dataVolumeTemplates:
+    - metadata:
+        name: worker-hotplug-rootdisk
+      spec:
+        source:
+          blank: {}
+        storage:
+          resources:
+            requests:
+              storage: 120Gi
+          accessModes:
+            - ReadWriteMany
+
+  template:
+    metadata:
+      labels:
+        app: ocp-worker
+        variant: hotplug
+    spec:
+      evictionStrategy: LiveMigrate
+
+      domain:
+        machine:
+          type: q35
+
+        cpu:
+          model: host-model
+          sockets: 8
+          cores: 1
+          threads: 1
+          maxSockets: 32
+
+        memory:
+          guest: 16Gi
+          maxGuest: 128Gi
+
+        ioThreadsPolicy: auto
+
+        devices:
+          networkInterfaceMultiqueue: true
+          blockMultiQueue: true
+          rng: {}
+          autoattachGraphicsDevice: false
+
+          disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+              # bootOrder: 1          # odkomentuj PO instalacji OS
+            - name: cdrom-iso
+              cdrom:
+                bus: sata
+              bootOrder: 1            # boot z ISO na start
+
+          interfaces:
+            - name: default
+              masquerade: {}
+              model: virtio
+
+        resources: {}
+
+      networks:
+        - name: default
+          pod: {}
+
+      volumes:
+        - name: rootdisk
+          dataVolume:
+            name: worker-hotplug-rootdisk
+        - name: cdrom-iso
+          persistentVolumeClaim:
+            claimName: tools-iso-pvc

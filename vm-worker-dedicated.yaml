@@ -1,0 +1,116 @@
+# =============================================================================
+# WARIANT 3: Worker OpenShift — dedykowane CPU (pinning), bez hotpluga
+# =============================================================================
+# CPU model:     host-passthrough
+# CPU hotplug:   NIE — zasoby stałe (Guaranteed QoS)
+# RAM hotplug:   NIE — zasoby stałe (Guaranteed QoS)
+# CPU pinning:   TAK — vCPU przypięte do fizycznych rdzeni, brak współdzielenia
+# Emulator:      TAK — wątek QEMU na osobnym rdzeniu (nie kradnie cykli VM)
+# Hugepages:     NIE
+# NUMA:          NIE
+# Multiqueue:    TAK
+# IOThreads:     TAK
+#
+# Kiedy użyć:
+#   - Produkcyjny worker gdzie przewidywalna wydajność CPU jest krytyczna
+#   - Workloady wrażliwe na latency (bazy danych, cache)
+#   - Nie potrzebujesz dynamicznie zmieniać CPU/RAM
+#
+# Kompromis:
+#   + Gwarantowane CPU — zero noisy neighbor
+#   + Izolowany wątek emulatora — QEMU nie zabiera cykli workloadom
+#   + Pełne instrukcje CPU (passthrough)
+#   - BEZ hotpluga CPU/RAM — zmiana zasobów wymaga restartu VM
+#   - Zużywa 8+1 fizycznych rdzeni (1 na emulator)
+#   - Live migration tylko między nodami z identycznym CPU
+#
+# Wymagania klastra:
+#   - Kubernetes CPU Manager włączony na nodach
+#   - Nody muszą mieć wystarczającą liczbę wolnych rdzeni
+# =============================================================================
+---
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: worker-dedicated
+  namespace: proj-vms
+  labels:
+    app: ocp-worker
+    variant: dedicated
+spec:
+  runStrategy: Always
+
+  dataVolumeTemplates:
+    - metadata:
+        name: worker-dedicated-rootdisk
+      spec:
+        source:
+          blank: {}
+        storage:
+          resources:
+            requests:
+              storage: 120Gi
+          accessModes:
+            - ReadWriteMany
+
+  template:
+    metadata:
+      labels:
+        app: ocp-worker
+        variant: dedicated
+    spec:
+      evictionStrategy: LiveMigrate
+
+      domain:
+        machine:
+          type: q35
+
+        cpu:
+          model: host-passthrough
+          dedicatedCpuPlacement: true
+          isolateEmulatorThread: true
+          sockets: 1
+          cores: 8
+          threads: 1
+
+        memory:
+          guest: 16Gi
+
+        ioThreadsPolicy: auto
+
+        devices:
+          networkInterfaceMultiqueue: true
+          blockMultiQueue: true
+          rng: {}
+          autoattachGraphicsDevice: false
+
+          disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+              # bootOrder: 1          # odkomentuj PO instalacji OS
+            - name: cdrom-iso
+              cdrom:
+                bus: sata
+              bootOrder: 1
+
+          interfaces:
+            - name: default
+              masquerade: {}
+              model: virtio
+
+        resources:
+          limits:
+            memory: 16Gi
+
+      networks:
+        - name: default
+          pod: {}
+
+      volumes:
+        - name: rootdisk
+          dataVolume:
+            name: worker-dedicated-rootdisk
+        - name: cdrom-iso
+          persistentVolumeClaim:
+            claimName: tools-iso-pvc
