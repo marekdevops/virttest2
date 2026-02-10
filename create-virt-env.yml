@@ -121,7 +121,7 @@
       when: vms_to_create | length > 0
 
     # =========================================================================
-    # Krok 6: Zbierz informacje o wszystkich VM (w tym MAC adresy)
+    # Krok 6: Zbierz informacje o wszystkich VM
     # =========================================================================
     - name: Pobierz informacje o wszystkich VMI
       kubernetes.core.k8s_info:
@@ -132,7 +132,39 @@
           - managed-by=ansible
       register: all_vmis
 
-    - name: Zbierz MAC adresy interfejsów Multus (vlan214)
+    - name: Pobierz informacje o wszystkich VM (spec)
+      kubernetes.core.k8s_info:
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        namespace: "{{ namespace }}"
+        label_selectors:
+          - managed-by=ansible
+      register: all_vms
+
+    # =========================================================================
+    # Krok 7: Podsumowanie parametrów VM (CPU, RAM, Storage)
+    # =========================================================================
+    - name: "=== PODSUMOWANIE MASZYN WIRTUALNYCH ==="
+      ansible.builtin.debug:
+        msg: "Znaleziono {{ all_vms.resources | length }} VM z etykietą managed-by=ansible"
+
+    - name: Podsumowanie parametrów VM
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.metadata.name }} |
+          CPU: {{ item.spec.template.spec.domain.cpu.sockets | default('?') }} sockets x
+          {{ item.spec.template.spec.domain.cpu.cores | default('?') }} cores |
+          RAM: {{ item.spec.template.spec.domain.memory.guest | default('?') }} |
+          Dysk: {{ (item.spec.dataVolumeTemplates | first).spec.storage.resources.requests.storage | default('?') }}
+      loop: "{{ all_vms.resources }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      when: all_vms.resources | length > 0
+
+    # =========================================================================
+    # Krok 8: Informacje o sieciach i MAC adresach
+    # =========================================================================
+    - name: Zbierz informacje o interfejsach sieciowych
       ansible.builtin.set_fact:
         vm_network_info: >-
           {{
@@ -142,17 +174,7 @@
             }') | list
           }}
 
-    - name: Pokaż informacje o sieciach VM
-      ansible.builtin.debug:
-        msg: "{{ item.name }} | {{ iface.name }}: MAC={{ iface.mac | default('brak') }}, IP={{ iface.ipAddress | default('brak') }}"
-      loop: "{{ vm_network_info }}"
-      loop_control:
-        label: "{{ item.name }}"
-      vars:
-        iface: "{{ item.interfaces | default([]) | first | default({}) }}"
-      when: vm_network_info | length > 0
-
-    - name: Pokaż wszystkie interfejsy każdej VM
+    - name: "=== INTERFEJSY SIECIOWE ==="
       ansible.builtin.debug:
         msg: "{{ item.0.name }} | {{ item.1.name }}: MAC={{ item.1.mac | default('brak') }}"
       loop: "{{ vm_network_info | subelements('interfaces', skip_missing=True) }}"
@@ -161,9 +183,9 @@
       when: vm_network_info | length > 0
 
     # =========================================================================
-    # Krok 7: Podsumowanie — MAC adresy vlan214 (Multus)
+    # Krok 9: Podsumowanie — MAC adresy vlan214 (Multus)
     # =========================================================================
-    - name: Podsumowanie MAC adresów vlan214
+    - name: "=== MAC ADRESY VLAN214 (MULTUS) ==="
       ansible.builtin.debug:
         msg: "{{ item.name }}: {{ vlan_mac }}"
       loop: "{{ vm_network_info }}"
