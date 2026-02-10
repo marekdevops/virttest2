@@ -1,0 +1,174 @@
+---
+# =============================================================================
+# Playbook: Tworzenie maszyn wirtualnych dla środowiska
+# =============================================================================
+# Użycie:
+#   ansible-playbook create-virt-env.yml -e @group_vars/virt_env1.yml
+#
+# Logika:
+#   - Istniejące VM NIE są modyfikowane (nawet jeśli parametry się różnią)
+#   - Tylko NOWE VM są tworzone z szablonu
+#   - Po utworzeniu sprawdzana jest poprawność (status VM)
+#   - Na końcu wyświetlane są MAC adresy interfejsów Multus
+# =============================================================================
+
+- name: Tworzenie maszyn wirtualnych
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    kubeconfig_path: "~/.kube/config"
+
+  tasks:
+    # =========================================================================
+    # Krok 1: Pobierz listę istniejących VM w namespace
+    # =========================================================================
+    - name: Pobierz listę istniejących VM
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig_path }}"
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        namespace: "{{ namespace }}"
+      register: existing_vms
+
+    - name: Zbuduj listę nazw istniejących VM
+      ansible.builtin.set_fact:
+        existing_vm_names: "{{ existing_vms.resources | map(attribute='metadata.name') | list }}"
+
+    - name: Pokaż istniejące VM
+      ansible.builtin.debug:
+        msg: "Istniejące VM w namespace {{ namespace }}: {{ existing_vm_names }}"
+
+    # =========================================================================
+    # Krok 2: Filtruj tylko nowe VM (których jeszcze nie ma)
+    # =========================================================================
+    - name: Określ które VM trzeba utworzyć
+      ansible.builtin.set_fact:
+        vms_to_create: "{{ vms | rejectattr('name', 'in', existing_vm_names) | list }}"
+
+    - name: Pokaż VM do utworzenia
+      ansible.builtin.debug:
+        msg: "VM do utworzenia: {{ vms_to_create | map(attribute='name') | list }}"
+
+    - name: Pokaż VM pominięte (już istnieją)
+      ansible.builtin.debug:
+        msg: "VM pominięte (już istnieją): {{ vms | selectattr('name', 'in', existing_vm_names) | map(attribute='name') | list }}"
+
+    # =========================================================================
+    # Krok 3: Utwórz nowe VM z szablonu
+    # =========================================================================
+    - name: Utwórz nowe maszyny wirtualne
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition: "{{ lookup('template', 'templates/vm-worker-large.yaml.j2') }}"
+      vars:
+        vm_name: "{{ item.name }}"
+        vm_cpu_sockets: "{{ item.cpu_sockets | default(defaults.cpu_sockets) }}"
+        vm_memory: "{{ item.memory | default(defaults.memory) }}"
+        vm_disk_size: "{{ item.disk_size | default(defaults.disk_size) }}"
+        vm_max_cpu_sockets: "{{ item.max_cpu_sockets | default(defaults.max_cpu_sockets) }}"
+        vm_max_memory: "{{ item.max_memory | default(defaults.max_memory) }}"
+      loop: "{{ vms_to_create }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: created_vms
+      when: vms_to_create | length > 0
+
+    # =========================================================================
+    # Krok 4: Poczekaj na utworzenie DataVolumes (provisioning dysków)
+    # =========================================================================
+    - name: Poczekaj na zakończenie provisioningu DataVolumes
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig_path }}"
+        api_version: cdi.kubevirt.io/v1beta1
+        kind: DataVolume
+        namespace: "{{ namespace }}"
+        name: "{{ item.name }}-rootdisk"
+      register: dv_status
+      until: >
+        dv_status.resources | length > 0 and
+        (dv_status.resources[0].status.phase | default('') == 'Succeeded' or
+         dv_status.resources[0].status.phase | default('') == 'WaitForFirstConsumer')
+      retries: 30
+      delay: 10
+      loop: "{{ vms_to_create }}"
+      loop_control:
+        label: "{{ item.name }}-rootdisk"
+      when: vms_to_create | length > 0
+
+    # =========================================================================
+    # Krok 5: Sprawdź czy VMI (instancje) się uruchomiły
+    # =========================================================================
+    - name: Poczekaj na uruchomienie VMI
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig_path }}"
+        api_version: kubevirt.io/v1
+        kind: VirtualMachineInstance
+        namespace: "{{ namespace }}"
+        name: "{{ item.name }}"
+      register: vmi_status
+      until: >
+        vmi_status.resources | length > 0 and
+        vmi_status.resources[0].status.phase | default('') == 'Running'
+      retries: 60
+      delay: 10
+      loop: "{{ vms_to_create }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: vms_to_create | length > 0
+
+    - name: Walidacja — pokaż status utworzonych VM
+      ansible.builtin.debug:
+        msg: "VM {{ item.name }} uruchomiona pomyślnie (status: Running)"
+      loop: "{{ vms_to_create }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: vms_to_create | length > 0
+
+    # =========================================================================
+    # Krok 6: Zbierz informacje o wszystkich VM (w tym MAC adresy)
+    # =========================================================================
+    - name: Pobierz informacje o wszystkich VMI
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig_path }}"
+        api_version: kubevirt.io/v1
+        kind: VirtualMachineInstance
+        namespace: "{{ namespace }}"
+        label_selectors:
+          - managed-by=ansible
+      register: all_vmis
+
+    - name: Zbierz MAC adresy interfejsów Multus (vlan214)
+      ansible.builtin.set_fact:
+        vm_network_info: >-
+          {{
+            all_vmis.resources | map('json_query', '{
+              name: metadata.name,
+              interfaces: status.interfaces
+            }') | list
+          }}
+
+    - name: Pokaż MAC adresy interfejsów Multus
+      ansible.builtin.debug:
+        msg: |
+          === Informacje o sieciach VM ===
+          {% for vm in vm_network_info %}
+          {{ vm.name }}:
+          {% for iface in vm.interfaces | default([]) %}
+            - {{ iface.name }}: MAC={{ iface.mac | default('brak') }}, IP={{ iface.ipAddress | default('brak') }}
+          {% endfor %}
+          {% endfor %}
+
+    # =========================================================================
+    # Krok 7: Podsumowanie — tabela MAC adresów Multus
+    # =========================================================================
+    - name: Podsumowanie — MAC adresy vlan214
+      ansible.builtin.debug:
+        msg: |
+          === MAC adresy interfejsów vlan214 (Multus) ===
+          {% for vm in vm_network_info %}
+          {% set vlan_iface = (vm.interfaces | default([]) | selectattr('name', 'equalto', 'vlan214') | first | default({})) %}
+          {{ vm.name }}: {{ vlan_iface.mac | default('interfejs nie znaleziony') }}
+          {% endfor %}
