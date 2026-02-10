@@ -75,7 +75,7 @@ spec:
           networkInterfaceMultiqueue: true
           blockMultiQueue: true
           rng: {}
-          autoattachGraphicsDevice: false
+          autoattachGraphicsDevice: true    # konsola VNC/serial w GUI OpenShift
 
           disks:
             - name: rootdisk
