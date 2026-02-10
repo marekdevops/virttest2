@@ -17,17 +17,13 @@
   connection: local
   gather_facts: false
 
-  vars:
-    kubeconfig_path: "~/.kube/config"
-
   tasks:
     # =========================================================================
     # Krok 1: Pobierz listę istniejących VM w namespace
     # =========================================================================
     - name: Pobierz listę istniejących VM
       kubernetes.core.k8s_info:
-        kubeconfig: "{{ kubeconfig_path }}"
-        api_version: kubevirt.io/v1
+                api_version: kubevirt.io/v1
         kind: VirtualMachine
         namespace: "{{ namespace }}"
       register: existing_vms
@@ -60,8 +56,7 @@
     # =========================================================================
     - name: Utwórz nowe maszyny wirtualne
       kubernetes.core.k8s:
-        kubeconfig: "{{ kubeconfig_path }}"
-        state: present
+                state: present
         definition: "{{ lookup('template', 'templates/vm-worker-large.yaml.j2') }}"
       vars:
         vm_name: "{{ item.name }}"
@@ -81,8 +76,7 @@
     # =========================================================================
     - name: Poczekaj na zakończenie provisioningu DataVolumes
       kubernetes.core.k8s_info:
-        kubeconfig: "{{ kubeconfig_path }}"
-        api_version: cdi.kubevirt.io/v1beta1
+                api_version: cdi.kubevirt.io/v1beta1
         kind: DataVolume
         namespace: "{{ namespace }}"
         name: "{{ item.name }}-rootdisk"
@@ -103,8 +97,7 @@
     # =========================================================================
     - name: Poczekaj na uruchomienie VMI
       kubernetes.core.k8s_info:
-        kubeconfig: "{{ kubeconfig_path }}"
-        api_version: kubevirt.io/v1
+                api_version: kubevirt.io/v1
         kind: VirtualMachineInstance
         namespace: "{{ namespace }}"
         name: "{{ item.name }}"
@@ -132,8 +125,7 @@
     # =========================================================================
     - name: Pobierz informacje o wszystkich VMI
       kubernetes.core.k8s_info:
-        kubeconfig: "{{ kubeconfig_path }}"
-        api_version: kubevirt.io/v1
+                api_version: kubevirt.io/v1
         kind: VirtualMachineInstance
         namespace: "{{ namespace }}"
         label_selectors:

@@ -12,7 +12,6 @@
 #   max_memory: 1Ti
 # =============================================================================
 
-kubeconfig_path: ~/.kube/config
 namespace: proj-vms
 
 # PVC z ISO do instalacji OS (musi istnieć w namespace)
