@@ -1,0 +1,114 @@
+# =============================================================================
+# WARIANT 5: Worker OpenShift — duża maszyna (32+ vCPU, 768GB+ RAM)
+# =============================================================================
+# CPU model:     host-passthrough (pełne możliwości CPU hosta)
+# CPU hotplug:   TAK — skaluj od 32 do 64 vCPU bez restartu
+# RAM hotplug:   TAK — skaluj od 768Gi do 1Ti bez restartu
+# CPU pinning:   NIE — przy takiej skali hugepages/dedicated wymagałyby ogromnych rezerwacji
+# Hugepages:     NIE — 768GB w hugepages = 393216 stron do zarezerwowania, niepraktyczne
+# NUMA:          NIE
+# Multiqueue:    TAK — krytyczne przy 32+ vCPU
+# IOThreads:     TAK
+#
+# Kiedy użyć:
+#   - Duże workery OCP (32+ core, 768GB+ RAM)
+#   - Bazy danych, Elasticsearch, Kafka, big data workloady
+#   - Potrzebujesz elastyczności hotplug przy dużej skali
+#
+# Kompromis:
+#   + Hotplug CPU i RAM działa — możesz zacząć mniejszy i skalować
+#   + Pełne instrukcje CPU (passthrough)
+#   + Multiqueue skaluje throughput z liczbą vCPU
+#   - Live migration tylko między nodami z identycznym CPU
+#   - Brak gwarantowanych zasobów CPU (ale przy 32 core mniej istotne)
+#   - Brak hugepages (ale overhead przy 768GB to <1% wydajności)
+#
+# Uwagi:
+#   - Upewnij się że node ma wystarczająco zasobów (32+ core, 768GB+ RAM wolne)
+#   - Dysk 250Gi — dostosuj jeśli potrzebujesz więcej na obrazy kontenerów
+#   - Rozważ dodatkowe dyski przez hotplug: virtctl addvolume ...
+# =============================================================================
+---
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: worker-large
+  namespace: proj-vms
+  labels:
+    app: ocp-worker
+    variant: large
+spec:
+  runStrategy: Always
+
+  dataVolumeTemplates:
+    - metadata:
+        name: worker-large-rootdisk
+      spec:
+        source:
+          blank: {}
+        storage:
+          resources:
+            requests:
+              storage: 250Gi
+          accessModes:
+            - ReadWriteMany
+
+  template:
+    metadata:
+      labels:
+        app: ocp-worker
+        variant: large
+    spec:
+      evictionStrategy: LiveMigrate
+
+      domain:
+        machine:
+          type: q35
+
+        cpu:
+          model: host-passthrough
+          sockets: 32
+          cores: 1
+          threads: 1
+          maxSockets: 64              # hotplug do 64 vCPU bez restartu
+
+        memory:
+          guest: 768Gi
+          maxGuest: 1Ti               # hotplug do 1Ti RAM bez restartu
+
+        ioThreadsPolicy: auto
+
+        devices:
+          networkInterfaceMultiqueue: true
+          blockMultiQueue: true
+          rng: {}
+          autoattachGraphicsDevice: true    # konsola VNC/serial w GUI OpenShift
+
+          disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+              # bootOrder: 1          # odkomentuj PO instalacji OS
+            - name: cdrom-iso
+              cdrom:
+                bus: sata
+              bootOrder: 1
+
+          interfaces:
+            - name: default
+              masquerade: {}
+              model: virtio
+
+        resources: {}
+
+      networks:
+        - name: default
+          pod: {}
+
+      volumes:
+        - name: rootdisk
+          dataVolume:
+            name: worker-large-rootdisk
+        - name: cdrom-iso
+          persistentVolumeClaim:
+            claimName: tools-iso-pvc
