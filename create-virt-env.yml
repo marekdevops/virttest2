@@ -142,25 +142,34 @@
             }') | list
           }}
 
-    - name: Pokaż MAC adresy interfejsów Multus
+    - name: Pokaż informacje o sieciach VM
       ansible.builtin.debug:
-        msg: |
-          === Informacje o sieciach VM ===
-          {% for vm in vm_network_info %}
-          {{ vm.name }}:
-          {% for iface in vm.interfaces | default([]) %}
-            - {{ iface.name }}: MAC={{ iface.mac | default('brak') }}, IP={{ iface.ipAddress | default('brak') }}
-          {% endfor %}
-          {% endfor %}
+        msg: "{{ item.name }} | {{ iface.name }}: MAC={{ iface.mac | default('brak') }}, IP={{ iface.ipAddress | default('brak') }}"
+      loop: "{{ vm_network_info }}"
+      loop_control:
+        label: "{{ item.name }}"
+      vars:
+        iface: "{{ item.interfaces | default([]) | first | default({}) }}"
+      when: vm_network_info | length > 0
+
+    - name: Pokaż wszystkie interfejsy każdej VM
+      ansible.builtin.debug:
+        msg: "{{ item.0.name }} | {{ item.1.name }}: MAC={{ item.1.mac | default('brak') }}"
+      loop: "{{ vm_network_info | subelements('interfaces', skip_missing=True) }}"
+      loop_control:
+        label: "{{ item.0.name }} - {{ item.1.name }}"
+      when: vm_network_info | length > 0
 
     # =========================================================================
-    # Krok 7: Podsumowanie — tabela MAC adresów Multus
+    # Krok 7: Podsumowanie — MAC adresy vlan214 (Multus)
     # =========================================================================
-    - name: Podsumowanie — MAC adresy vlan214
+    - name: Podsumowanie MAC adresów vlan214
       ansible.builtin.debug:
-        msg: |
-          === MAC adresy interfejsów vlan214 (Multus) ===
-          {% for vm in vm_network_info %}
-          {% set vlan_iface = (vm.interfaces | default([]) | selectattr('name', 'equalto', 'vlan214') | first | default({})) %}
-          {{ vm.name }}: {{ vlan_iface.mac | default('interfejs nie znaleziony') }}
-          {% endfor %}
+        msg: "{{ item.name }}: {{ vlan_mac }}"
+      loop: "{{ vm_network_info }}"
+      loop_control:
+        label: "{{ item.name }}"
+      vars:
+        vlan_iface: "{{ item.interfaces | default([]) | selectattr('name', 'equalto', 'vlan214') | first | default({}) }}"
+        vlan_mac: "{{ vlan_iface.mac | default('brak') }}"
+      when: vm_network_info | length > 0
