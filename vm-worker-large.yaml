@@ -98,12 +98,18 @@ spec:
             - name: default
               masquerade: {}
               model: virtio
+            - name: vlan214
+              bridge: {}
+              model: virtio
 
         resources: {}
 
       networks:
         - name: default
           pod: {}
+        - name: vlan214
+          multus:
+            networkName: default/vlan214-net
 
       volumes:
         - name: rootdisk
